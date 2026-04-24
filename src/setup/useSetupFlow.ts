@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect } from 'react'
 import type { CollectionSceneBrief, DetectedZone, QuickAction, RoomProfile, SetupStep } from '../types'
 import { api } from '../api'
+import { track } from '../analytics'
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
@@ -9,6 +10,8 @@ export interface SetupFlowConfig {
   activeBrief: CollectionSceneBrief | null
   /** Collection name written into the confirmed brief */
   collectionName: string
+  /** Which product surface is hosting the setup flow */
+  surface: 'collection' | 'pdp'
   /**
    * Called once the user confirms their setup choices with the draft brief.
    * May be async — the hook awaits it and keeps isConfirming true until it resolves.
@@ -51,9 +54,10 @@ export interface SetupFlowBindings extends SetupModalProps {
 export function useSetupFlow({
   activeBrief,
   collectionName,
+  surface,
   onConfirm,
 }: SetupFlowConfig): {
-  openSetup: () => void
+  openSetup: (trigger?: 'get_started' | 'edit' | 'try_it') => void
   bindings: SetupFlowBindings
 } {
   const [isOpen, setIsOpen] = useState(false)
@@ -77,7 +81,9 @@ export function useSetupFlow({
       .finally(() => setIsLoadingRooms(false))
   }, [])
 
-  const openSetup = useCallback(() => {
+  const openSetup = useCallback((trigger: 'get_started' | 'edit' | 'try_it' = 'get_started') => {
+    track('setup_opened', { surface, properties: { trigger } })
+
     if (activeBrief) {
       setRoom(activeBrief.room)
       setAction(activeBrief.action)
@@ -97,11 +103,17 @@ export function useSetupFlow({
       setStep('room-select')
     }
     setIsOpen(true)
-  }, [activeBrief])
+  }, [activeBrief, surface])
 
-  const close = useCallback(() => setIsOpen(false), [])
+  const close = useCallback(() => {
+    track('setup_cancelled', { surface })
+    setIsOpen(false)
+  }, [surface])
 
-  const handleRoomSelect = useCallback((r: RoomProfile) => setRoom(r), [])
+  const handleRoomSelect = useCallback((r: RoomProfile) => {
+    track('room_selected', { surface, roomId: r.id, properties: { room_name: r.name, is_uploaded: !!r.isUploaded } })
+    setRoom(r)
+  }, [surface])
 
   // Advancing to step 2 triggers the room analysis fetch
   const handleRoomContinue = useCallback(() => {
@@ -120,7 +132,14 @@ export function useSetupFlow({
     setZones([])
   }, [])
 
+  const handleActionSelect = useCallback((a: QuickAction) => {
+    track('action_selected', { surface, actionId: a.id, properties: { action_label: a.label } })
+    setAction(a)
+  }, [surface])
+
   const handleRoomUpload = useCallback((file: File) => {
+    track('room_uploaded', { surface, roomId: 'uploaded-room', properties: { filename: file.name } })
+
     const reader = new FileReader()
     reader.onload = async (e) => {
       const imageDataUrl = e.target?.result as string
@@ -141,7 +160,6 @@ export function useSetupFlow({
       // Send to server so the image is available for images.edit() later
       try {
         const serverRoom = await api.uploadRoom({ imageDataUrl, filename: file.name })
-        // Merge in the server's name (if different), keep the local imageDataUrl for thumbnail
         setRooms(prev =>
           prev.map(r =>
             r.id === 'uploaded-room' ? { ...r, name: serverRoom.name } : r,
@@ -155,7 +173,7 @@ export function useSetupFlow({
       }
     }
     reader.readAsDataURL(file)
-  }, [])
+  }, [surface])
 
   // Confirm: pass the draft brief to the surface's onConfirm (which may be async),
   // then close. isConfirming stays true while the surface does its API work.
@@ -167,6 +185,12 @@ export function useSetupFlow({
       refinementText: refinement,
       collectionName,
     }
+    track('setup_confirmed', {
+      surface,
+      roomId: room.id,
+      actionId: action.id,
+      properties: { has_refinement: refinement.trim().length > 0 },
+    })
     setIsConfirming(true)
     try {
       await onConfirm(draftBrief)
@@ -176,7 +200,7 @@ export function useSetupFlow({
     } finally {
       setIsConfirming(false)
     }
-  }, [room, action, refinement, collectionName, isConfirming, onConfirm])
+  }, [room, action, refinement, collectionName, surface, isConfirming, onConfirm])
 
   return {
     openSetup,
@@ -193,7 +217,7 @@ export function useSetupFlow({
       isConfirming,
       onRoomSelect: handleRoomSelect,
       onRoomContinue: handleRoomContinue,
-      onActionSelect: setAction,
+      onActionSelect: handleActionSelect,
       onRefinementChange: setRefinement,
       onChangeRoom: handleChangeRoom,
       onRoomUpload: handleRoomUpload,

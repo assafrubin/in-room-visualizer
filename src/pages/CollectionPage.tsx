@@ -8,6 +8,7 @@ import { InRoomBanner } from '../components/InRoomBanner'
 import { useSetupFlow, SetupModal } from '../setup'
 import { api, isTerminalStatus } from '../api'
 import type { RenderJob } from '../api'
+import { track } from '../analytics'
 
 const COLLECTION_NAME = 'Side Cabinets'
 
@@ -96,9 +97,14 @@ export function CollectionPage() {
     return () => clearInterval(timer)
   }, [renderJobs])
 
+  useEffect(() => {
+    track('collection_viewed', { surface: 'collection' })
+  }, [])
+
   const { openSetup, bindings } = useSetupFlow({
     activeBrief: sceneBrief,
     collectionName: COLLECTION_NAME,
+    surface: 'collection',
     onConfirm: async (draft: CollectionSceneBrief) => {
       const record = await api.createSceneBrief({
         roomId: draft.room.id,
@@ -120,7 +126,7 @@ export function CollectionPage() {
       {inRoomMode && sceneBrief && (
         <InRoomBanner
           brief={sceneBrief}
-          onEdit={openSetup}
+          onEdit={() => openSetup('edit')}
           onClear={() => { setSceneBrief(null); setRenderJobs(new Map()) }}
         />
       )}
@@ -149,7 +155,7 @@ export function CollectionPage() {
                     <strong>See these in your room</strong>
                     <span>Visualize any cabinet in your actual space — free, instant preview</span>
                   </div>
-                  <button className="btn btn--primary btn--lg" onClick={openSetup}>Get started</button>
+                  <button className="btn btn--primary btn--lg" onClick={() => openSetup('get_started')}>Get started</button>
                 </div>
               </div>
             )}

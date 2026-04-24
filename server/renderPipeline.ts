@@ -1,4 +1,5 @@
 import OpenAI, { toFile } from 'openai'
+import { trackRenderJobSucceeded, trackRenderJobFailed } from './analytics.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -75,6 +76,7 @@ export async function processRenderJob(
 
   job.status = 'processing'
   job.updatedAt = new Date().toISOString()
+  const startedAt = Date.now()
 
   try {
     const client = getClient()
@@ -149,10 +151,12 @@ export async function processRenderJob(
     job.imageUrl = `/api/render-jobs/${jobId}/image`
     job.revisedPrompt = null
     job.updatedAt = new Date().toISOString()
+    trackRenderJobSucceeded(jobId, job.productId, Date.now() - startedAt)
   } catch (err) {
     job.status = 'failed'
     job.error = err instanceof Error ? err.message : String(err)
     job.updatedAt = new Date().toISOString()
     console.error(`[render-pipeline] job ${jobId} failed:`, err)
+    trackRenderJobFailed(jobId, job.productId, job.error, Date.now() - startedAt)
   }
 }

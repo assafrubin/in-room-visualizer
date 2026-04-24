@@ -9,6 +9,7 @@ import { CabinetSVG, PDPRoomScene } from '../components/CabinetImage'
 import { useSetupFlow, SetupModal } from '../setup'
 import { api, isTerminalStatus } from '../api'
 import type { RenderJob } from '../api'
+import { track } from '../analytics'
 
 const COLLECTION_NAME = 'Side Cabinets'
 
@@ -65,9 +66,14 @@ export function PDPPage() {
     return () => clearInterval(timer)
   }, [renderJob?.jobId, renderJob?.status])
 
+  useEffect(() => {
+    track('pdp_viewed', { surface: 'pdp', productId: PRODUCT.id })
+  }, [PRODUCT.id])
+
   const { openSetup, bindings } = useSetupFlow({
     activeBrief: pdpBrief,
     collectionName: COLLECTION_NAME,
+    surface: 'pdp',
     onConfirm: async (draft: CollectionSceneBrief) => {
       const record = await api.createSceneBrief({
         roomId: draft.room.id,
@@ -199,10 +205,10 @@ export function PDPPage() {
                   <strong>See this in your room</strong>
                   <span>Free instant preview — no app needed</span>
                 </div>
-                <button className="btn btn--primary" onClick={openSetup}>Try it</button>
+                <button className="btn btn--primary" onClick={() => openSetup('try_it')}>Try it</button>
               </div>
             ) : (
-              <PDPInlineSummary brief={pdpBrief} onEdit={openSetup} onClear={handleClear} />
+              <PDPInlineSummary brief={pdpBrief} onEdit={() => openSetup('edit')} onClear={handleClear} />
             )}
           </div>
 

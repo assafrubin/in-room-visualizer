@@ -52,7 +52,7 @@ export function RoomAnalysis({ room, zones, isLoadingZones, onChangeRoom }: Room
         <RoomPreview room={room} />
       </div>
 
-      <div className="room-analysis__zones">
+      <div className="room-analysis__zones" data-testid="zones-section">
         {isLoadingZones ? (
           <p className="room-analysis__zones-label">Analysing room…</p>
         ) : (

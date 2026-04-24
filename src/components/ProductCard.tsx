@@ -1,7 +1,9 @@
+import { useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import type { Product, CollectionSceneBrief } from '../types'
 import type { RenderJob } from '../api'
 import { CabinetSVG, PersonalizedCabinetImage } from './CabinetImage'
+import { track } from '../analytics'
 
 interface ProductCardProps {
   product: Product
@@ -68,6 +70,35 @@ function CardBody({ product }: { product: Product }) {
   )
 }
 
+function SucceededCard({
+  product, sceneBrief, renderJob, pdpHref,
+}: { product: Product; sceneBrief: CollectionSceneBrief; renderJob: RenderJob; pdpHref: string }) {
+  const firedRef = useRef(false)
+  useEffect(() => {
+    if (!firedRef.current) {
+      firedRef.current = true
+      track('render_image_viewed', { surface: 'collection', productId: product.id, jobId: renderJob.jobId })
+    }
+  }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <Link to={pdpHref} className="product-card product-card--personalized product-card--link">
+      <div className="product-card__image-wrap">
+        <img
+          src={renderJob.imageUrl!}
+          alt={`${product.title} in ${sceneBrief.room.name}`}
+          className="product-card__render-img"
+        />
+        <div className="personalized-badge">
+          <span className="personalized-badge__icon">✦</span>
+          In your {sceneBrief.room.name}
+        </div>
+      </div>
+      <CardBody product={product} />
+    </Link>
+  )
+}
+
 export function ProductCard({ product, sceneBrief, renderJob }: ProductCardProps) {
   const pdpHref = `/products/${product.id}`
 
@@ -79,22 +110,7 @@ export function ProductCard({ product, sceneBrief, renderJob }: ProductCardProps
     }
 
     if (status === 'succeeded' && imageUrl && sceneBrief) {
-      return (
-        <Link to={pdpHref} className="product-card product-card--personalized product-card--link">
-          <div className="product-card__image-wrap">
-            <img
-              src={imageUrl}
-              alt={`${product.title} in ${sceneBrief.room.name}`}
-              className="product-card__render-img"
-            />
-            <div className="personalized-badge">
-              <span className="personalized-badge__icon">✦</span>
-              In your {sceneBrief.room.name}
-            </div>
-          </div>
-          <CardBody product={product} />
-        </Link>
-      )
+      return <SucceededCard product={product} sceneBrief={sceneBrief} renderJob={renderJob} pdpHref={pdpHref} />
     }
 
     if (status === 'failed') {

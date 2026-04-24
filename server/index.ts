@@ -24,6 +24,7 @@ import {
   type RenderJobRecord,
   type ProductDetails,
 } from './renderPipeline.js'
+import { trackEvent, trackRenderJobCreated, type TrackEventInput } from './analytics.js'
 import type { QuickActionId } from '../src/types/index.js'
 
 const app = express()
@@ -113,6 +114,27 @@ app.post('/api/scene-briefs', async (req, res) => {
   }
 })
 
+// ─── POST /api/events ────────────────────────────────────────────────────────
+// Receives client-side analytics events. Fire-and-forget from the frontend.
+
+app.post('/api/events', (req, res) => {
+  const body = req.body as TrackEventInput & { anonymousId?: string }
+  if (!body?.eventType) { res.status(400).json({ error: 'eventType required' }); return }
+
+  try {
+    const eventId = trackEvent({
+      ...body,
+      userAgent: req.headers['user-agent'] ?? '',
+      ip: (req.headers['x-forwarded-for'] as string ?? req.socket.remoteAddress ?? '').split(',')[0].trim(),
+    })
+    res.json({ ok: true, eventId })
+  } catch (err) {
+    // Analytics must never break the client
+    console.error('[analytics] failed to track event:', err)
+    res.json({ ok: false })
+  }
+})
+
 // ─── POST /api/render-jobs ────────────────────────────────────────────────────
 // Returns immediately with status "submitted", then processes asynchronously.
 
@@ -151,6 +173,8 @@ app.post('/api/render-jobs', (req, res) => {
   renderJobs.set(job.jobId, job)
   console.info(`[render-jobs] created ${job.jobId} for product ${productId ?? 'collection'}`)
 
+  trackRenderJobCreated(job.jobId, productId ?? null, brief.roomId, roomImages.has(brief.roomId))
+
   // Kick off generation asynchronously — response returns before it starts
   setImmediate(() => processRenderJob(job.jobId, renderJobs))
 
@@ -176,9 +200,15 @@ app.get('/api/render-jobs/:jobId/image', (req, res) => {
   res.send(img.data)
 })
 
+// ─── Exports (used by tests via supertest) ───────────────────────────────────
+
+export { app }
+
 // ─── Start ───────────────────────────────────────────────────────────────────
 
-const PORT = Number(process.env.PORT ?? 3001)
-app.listen(PORT, () => {
-  console.log(`[server] listening on http://localhost:${PORT}`)
-})
+if (process.env.NODE_ENV !== 'test') {
+  const PORT = Number(process.env.PORT ?? 3001)
+  app.listen(PORT, () => {
+    console.log(`[server] listening on http://localhost:${PORT}`)
+  })
+}
