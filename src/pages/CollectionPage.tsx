@@ -11,6 +11,7 @@ import type { RenderJob } from '../api'
 import { track } from '../analytics'
 
 const COLLECTION_NAME = 'Side Cabinets'
+const COLLECTION_HANDLE = 'side-cabinets'
 
 // Products that get a real render job when a brief is active.
 const RENDER_PRODUCT_IDS = new Set(['p1', 'p4', 'p7', 'p10'])
@@ -25,7 +26,21 @@ export function CollectionPage() {
 
   const [sceneBrief, setSceneBrief] = useState<EnhancedSceneBrief | null>(null)
   const [renderJobs, setRenderJobs] = useState<Map<string, RenderJob>>(new Map())
+  // null = loading, true/false = resolved
+  const [visualizerEnabled, setVisualizerEnabled] = useState<boolean | null>(null)
   const inRoomMode = sceneBrief !== null
+
+  // Check whether the backoffice has enabled the visualizer for this collection.
+  // Falls back to enabled=true when the backoffice is not configured.
+  useEffect(() => {
+    fetch('/api/collection-config')
+      .then(r => r.json() as Promise<{ configured: boolean; enabledCollectionHandles: string[] }>)
+      .then(data => {
+        if (!data.configured) { setVisualizerEnabled(true); return }
+        setVisualizerEnabled(data.enabledCollectionHandles.includes(COLLECTION_HANDLE))
+      })
+      .catch(() => setVisualizerEnabled(true))
+  }, [])
 
   // Upgrade an imported brief from the PDP bridge and seed render jobs
   useEffect(() => {
@@ -123,7 +138,7 @@ export function CollectionPage() {
     <div className="app">
       <SiteHeader />
 
-      {inRoomMode && sceneBrief && (
+      {visualizerEnabled && inRoomMode && sceneBrief && (
         <InRoomBanner
           brief={sceneBrief}
           onEdit={() => openSetup('edit')}
@@ -147,7 +162,7 @@ export function CollectionPage() {
               </p>
               <p className="collection-hero__count">{MOCK_PRODUCTS.length} products</p>
             </div>
-            {!inRoomMode && (
+            {visualizerEnabled && !inRoomMode && (
               <div className="collection-hero__cta">
                 <div className="cta-card">
                   <div className="cta-card__icon">✦</div>

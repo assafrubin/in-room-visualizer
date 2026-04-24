@@ -200,6 +200,34 @@ app.get('/api/render-jobs/:jobId/image', (req, res) => {
   res.send(img.data)
 })
 
+// ─── GET /api/collection-config ──────────────────────────────────────────────
+// Proxies to the backoffice to check which collections have the visualizer
+// enabled. If BACKOFFICE_URL or SHOP_DOMAIN is not configured, returns
+// { configured: false } so the frontend defaults to showing the visualizer.
+
+app.get('/api/collection-config', async (_req, res) => {
+  const backofficeUrl = process.env.BACKOFFICE_URL
+  const shopDomain = process.env.SHOP_DOMAIN
+
+  if (!backofficeUrl || !shopDomain) {
+    res.json({ configured: false, enabledCollectionHandles: [] })
+    return
+  }
+
+  try {
+    const url = `${backofficeUrl}/api/public/config?shop=${encodeURIComponent(shopDomain)}`
+    const upstream = await fetch(url)
+    if (!upstream.ok) {
+      res.json({ configured: false, enabledCollectionHandles: [] })
+      return
+    }
+    const data = await upstream.json() as { enabledCollectionHandles: string[] }
+    res.json({ configured: true, enabledCollectionHandles: data.enabledCollectionHandles })
+  } catch {
+    res.json({ configured: false, enabledCollectionHandles: [] })
+  }
+})
+
 // ─── Exports (used by tests via supertest) ───────────────────────────────────
 
 export { app }
