@@ -5,9 +5,7 @@ import { RoomAnalysis } from './steps/RoomAnalysis'
 import { QuickActionsPanel } from './steps/QuickActionsPanel'
 
 interface SetupModalExtraProps {
-  /** Breadcrumb label shown above the title — e.g. "Side Cabinets" or "Malm Side Cabinet" */
   contextLabel?: string
-  /** Use singular "this" instead of plural "these" in step-1 title */
   singleProduct?: boolean
 }
 
@@ -16,6 +14,11 @@ export function SetupModal({
   room,
   action,
   refinement,
+  rooms,
+  zones,
+  isLoadingRooms,
+  isLoadingZones,
+  isConfirming,
   contextLabel = 'Side Cabinets',
   singleProduct = false,
   onRoomSelect,
@@ -23,14 +26,13 @@ export function SetupModal({
   onActionSelect,
   onRefinementChange,
   onChangeRoom,
+  onRoomUpload,
   onConfirm,
   onClose,
   canConfirm,
 }: SetupModalProps & SetupModalExtraProps) {
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
@@ -67,12 +69,23 @@ export function SetupModal({
 
         <div className="modal__body">
           {step === 'room-select' ? (
-            <RoomSelector room={room} onSelect={onRoomSelect} />
+            <RoomSelector
+              room={room}
+              rooms={rooms}
+              isLoading={isLoadingRooms}
+              onSelect={onRoomSelect}
+              onUpload={onRoomUpload}
+            />
           ) : (
             <div className="modal__two-col">
               <div className="modal__col modal__col--analysis">
                 {room && (
-                  <RoomAnalysis room={room} onChangeRoom={onChangeRoom} />
+                  <RoomAnalysis
+                    room={room}
+                    zones={zones}
+                    isLoadingZones={isLoadingZones}
+                    onChangeRoom={onChangeRoom}
+                  />
                 )}
               </div>
               <div className="modal__col modal__col--actions">
@@ -89,18 +102,18 @@ export function SetupModal({
 
         <div className="modal__footer">
           {step === 'actions' && (
-            <button className="btn btn--ghost" onClick={onChangeRoom}>
+            <button className="btn btn--ghost" onClick={onChangeRoom} disabled={isConfirming}>
               ← Back
             </button>
           )}
           <div className="modal__footer-right">
-            <button className="btn btn--ghost" onClick={onClose}>
+            <button className="btn btn--ghost" onClick={onClose} disabled={isConfirming}>
               Cancel
             </button>
             {step === 'room-select' ? (
               <button
                 className="btn btn--primary"
-                disabled={!room}
+                disabled={!room || isLoadingRooms}
                 onClick={onRoomContinue}
               >
                 Continue →
@@ -111,7 +124,7 @@ export function SetupModal({
                 disabled={!canConfirm}
                 onClick={onConfirm}
               >
-                ✦ See in room
+                {isConfirming ? 'Setting up…' : '✦ See in room'}
               </button>
             )}
           </div>
