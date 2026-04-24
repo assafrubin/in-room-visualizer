@@ -5,6 +5,8 @@ export interface RoomProfile {
   accentColor: string
   floorColor: string
   isUploaded?: boolean
+  /** Data URL of the user's uploaded photo — replaces the SVG thumbnail when present */
+  imageDataUrl?: string
 }
 
 export type QuickActionId =
@@ -47,6 +49,19 @@ export interface Product {
   rating: number
   reviewCount: number
   material: string
+  imageUrl?: string
 }
 
 export type SetupStep = 'room-select' | 'actions'
+
+/**
+ * The client-side brief extended with server-assigned fields from POST /api/scene-briefs.
+ * normalizedIntent and renderPrompt are produced by the language model;
+ * id and createdAt are assigned by the server.
+ */
+export interface EnhancedSceneBrief extends CollectionSceneBrief {
+  id: string
+  normalizedIntent: string
+  renderPrompt: string
+  createdAt: string
+}

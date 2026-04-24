@@ -8,7 +8,7 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<CollectionPage />} />
-        <Route path="/products/malm-side-cabinet" element={<PDPPage />} />
+        <Route path="/products/:productId" element={<PDPPage />} />
       </Routes>
     </BrowserRouter>
   )
