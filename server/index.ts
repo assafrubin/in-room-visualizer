@@ -24,7 +24,7 @@ import {
   type RenderJobRecord,
   type ProductDetails,
 } from './renderPipeline.js'
-import { trackEvent, trackRenderJobCreated, type TrackEventInput } from './analytics.js'
+import { trackEvent, trackRenderJobCreated, getAnalyticsSummary, type TrackEventInput } from './analytics.js'
 import type { QuickActionId } from '../src/types/index.js'
 
 const app = express()
@@ -135,14 +135,38 @@ app.post('/api/events', (req, res) => {
   }
 })
 
+// ─── GET /api/analytics/internal ─────────────────────────────────────────────
+// Called by the backoffice server only — protected by shared ANALYTICS_SECRET.
+
+app.get('/api/analytics/internal', (req, res) => {
+  const secret = process.env.ANALYTICS_SECRET
+  if (secret && req.headers['x-analytics-secret'] !== secret) {
+    res.status(401).json({ error: 'Unauthorized' }); return
+  }
+
+  const shopDomain = req.query.shop as string | undefined
+  if (!shopDomain) { res.status(400).json({ error: 'Missing shop parameter' }); return }
+
+  const since = req.query.since as string | undefined
+
+  try {
+    const summary = getAnalyticsSummary(shopDomain, since)
+    res.json(summary)
+  } catch (err) {
+    console.error('[analytics/internal]', err)
+    res.status(500).json({ error: 'Analytics query failed' })
+  }
+})
+
 // ─── POST /api/render-jobs ────────────────────────────────────────────────────
 // Returns immediately with status "submitted", then processes asynchronously.
 
 app.post('/api/render-jobs', (req, res) => {
-  const { briefId, productId = null, product } = req.body as {
+  const { briefId, productId = null, product, shopDomain = null } = req.body as {
     briefId: string
     productId?: string | null
     product: ProductDetails
+    shopDomain?: string | null
   }
 
   const brief = briefs.get(briefId)
@@ -156,6 +180,7 @@ app.post('/api/render-jobs', (req, res) => {
     briefId,
     roomId: brief.roomId,
     productId,
+    shopDomain,
     briefRenderPrompt: brief.renderPrompt,
     compiledPrompt,
     editPrompt,
@@ -173,7 +198,7 @@ app.post('/api/render-jobs', (req, res) => {
   renderJobs.set(job.jobId, job)
   console.info(`[render-jobs] created ${job.jobId} for product ${productId ?? 'collection'}`)
 
-  trackRenderJobCreated(job.jobId, productId ?? null, brief.roomId, roomImages.has(brief.roomId))
+  trackRenderJobCreated(job.jobId, productId ?? null, brief.roomId, roomImages.has(brief.roomId), shopDomain ?? undefined)
 
   // Kick off generation asynchronously — response returns before it starts
   setImmediate(() => processRenderJob(job.jobId, renderJobs))
@@ -202,12 +227,13 @@ app.get('/api/render-jobs/:jobId/image', (req, res) => {
 
 // ─── GET /api/collection-config ──────────────────────────────────────────────
 // Proxies to the backoffice to check which collections have the visualizer
-// enabled. If BACKOFFICE_URL or SHOP_DOMAIN is not configured, returns
-// { configured: false } so the frontend defaults to showing the visualizer.
+// enabled. Accepts ?shop=mystore.myshopify.com — falls back to SHOP_DOMAIN env
+// for local dev. Returns { configured: false } so the frontend shows the
+// visualizer when neither is provided.
 
-app.get('/api/collection-config', async (_req, res) => {
+app.get('/api/collection-config', async (req, res) => {
   const backofficeUrl = process.env.BACKOFFICE_URL
-  const shopDomain = process.env.SHOP_DOMAIN
+  const shopDomain = (req.query.shop as string | undefined) ?? process.env.SHOP_DOMAIN
 
   if (!backofficeUrl || !shopDomain) {
     res.json({ configured: false, enabledCollectionHandles: [] })

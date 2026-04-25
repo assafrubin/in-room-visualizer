@@ -224,3 +224,86 @@ describe('GET /api/render-jobs/:jobId/image', () => {
     expect(res.status).toBe(404)
   })
 })
+
+// ─── POST /api/events ─────────────────────────────────────────────────────────
+
+describe('POST /api/events', () => {
+  it('returns ok:true for a valid event', async () => {
+    const res = await request.post('/api/events').send({
+      eventType: 'pdp_viewed',
+      shopDomain: 'test.myshopify.com',
+      anonymousId: 'anon-test-1',
+    })
+    expect(res.status).toBe(200)
+    expect(res.body.ok).toBe(true)
+    expect(typeof res.body.eventId).toBe('string')
+  })
+
+  it('returns 400 when eventType is missing', async () => {
+    const res = await request.post('/api/events').send({ shopDomain: 'test.myshopify.com' })
+    expect(res.status).toBe(400)
+  })
+
+  it('accepts camera event types', async () => {
+    const cameraEvents = ['camera_opened', 'camera_capture', 'camera_denied', 'camera_error']
+    for (const eventType of cameraEvents) {
+      const res = await request.post('/api/events').send({ eventType, shopDomain: 'test.myshopify.com' })
+      expect(res.status).toBe(200)
+      expect(res.body.ok).toBe(true)
+    }
+  })
+
+  it('stamps shopDomain on the stored event', async () => {
+    await request.post('/api/events').send({
+      eventType: 'setup_confirmed',
+      shopDomain: 'merchant-x.myshopify.com',
+      anonymousId: 'anon-merchant-x',
+    })
+    // Verify via analytics endpoint
+    const res = await request.get('/api/analytics/internal?shop=merchant-x.myshopify.com')
+    expect(res.status).toBe(200)
+    const confirmed = res.body.funnel?.find((r: { event_type: string }) => r.event_type === 'setup_confirmed')
+    expect(confirmed?.count).toBe(1)
+  })
+})
+
+// ─── GET /api/analytics/internal ─────────────────────────────────────────────
+
+describe('GET /api/analytics/internal', () => {
+  it('returns 400 when shop param is missing', async () => {
+    const res = await request.get('/api/analytics/internal')
+    expect(res.status).toBe(400)
+  })
+
+  it('returns a valid summary shape for a known shop', async () => {
+    await request.post('/api/events').send({ eventType: 'collection_viewed', shopDomain: 'shape-shop.myshopify.com' })
+    const res = await request.get('/api/analytics/internal?shop=shape-shop.myshopify.com')
+    expect(res.status).toBe(200)
+    expect(Array.isArray(res.body.funnel)).toBe(true)
+    expect(Array.isArray(res.body.rendersByDevice)).toBe(true)
+    expect(Array.isArray(res.body.rendersByDay)).toBe(true)
+    expect(Array.isArray(res.body.topProducts)).toBe(true)
+  })
+
+  it('returns 200 with empty arrays for a shop with no events', async () => {
+    const res = await request.get('/api/analytics/internal?shop=no-events.myshopify.com')
+    expect(res.status).toBe(200)
+    expect(res.body.funnel).toEqual([])
+  })
+
+  it('returns 401 when ANALYTICS_SECRET is set and header is missing', async () => {
+    process.env.ANALYTICS_SECRET = 'super-secret'
+    const res = await request.get('/api/analytics/internal?shop=any.myshopify.com')
+    expect(res.status).toBe(401)
+    delete process.env.ANALYTICS_SECRET
+  })
+
+  it('returns 200 when the correct ANALYTICS_SECRET header is provided', async () => {
+    process.env.ANALYTICS_SECRET = 'correct-secret'
+    const res = await request
+      .get('/api/analytics/internal?shop=any.myshopify.com')
+      .set('x-analytics-secret', 'correct-secret')
+    expect(res.status).toBe(200)
+    delete process.env.ANALYTICS_SECRET
+  })
+})

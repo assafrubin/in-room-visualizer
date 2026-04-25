@@ -33,7 +33,9 @@ export function CollectionPage() {
   // Check whether the backoffice has enabled the visualizer for this collection.
   // Falls back to enabled=true when the backoffice is not configured.
   useEffect(() => {
-    fetch('/api/collection-config')
+    const shop = new URLSearchParams(window.location.search).get('shop') ?? ''
+    const url = shop ? `/api/collection-config?shop=${encodeURIComponent(shop)}` : '/api/collection-config'
+    fetch(url)
       .then(r => r.json() as Promise<{ configured: boolean; enabledCollectionHandles: string[] }>)
       .then(data => {
         if (!data.configured) { setVisualizerEnabled(true); return }

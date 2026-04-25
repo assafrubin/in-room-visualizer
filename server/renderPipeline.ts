@@ -14,6 +14,7 @@ export interface RenderJobRecord {
   briefId: string
   roomId: string
   productId: string | null
+  shopDomain: string | null
   // Prompt compilation — explicit and inspectable
   briefRenderPrompt: string     // raw prompt from the scene-brief GPT step
   compiledPrompt: string        // final prompt sent to gpt-image-2 (generate path)
@@ -151,12 +152,12 @@ export async function processRenderJob(
     job.imageUrl = `/api/render-jobs/${jobId}/image`
     job.revisedPrompt = null
     job.updatedAt = new Date().toISOString()
-    trackRenderJobSucceeded(jobId, job.productId, Date.now() - startedAt)
+    trackRenderJobSucceeded(jobId, job.productId, Date.now() - startedAt, job.shopDomain ?? undefined)
   } catch (err) {
     job.status = 'failed'
     job.error = err instanceof Error ? err.message : String(err)
     job.updatedAt = new Date().toISOString()
     console.error(`[render-pipeline] job ${jobId} failed:`, err)
-    trackRenderJobFailed(jobId, job.productId, job.error, Date.now() - startedAt)
+    trackRenderJobFailed(jobId, job.productId, job.error, Date.now() - startedAt, job.shopDomain ?? undefined)
   }
 }

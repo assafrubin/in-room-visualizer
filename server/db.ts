@@ -57,4 +57,16 @@ function migrate(db: InstanceType<typeof Database>): void {
     CREATE INDEX IF NOT EXISTS idx_events_job        ON events(job_id);
     CREATE INDEX IF NOT EXISTS idx_events_surface    ON events(surface);
   `)
+
+  // Additive migrations — safe to re-run; ALTER TABLE fails silently if column exists
+  for (const sql of [
+    `ALTER TABLE sessions ADD COLUMN shop_domain TEXT`,
+    `ALTER TABLE events   ADD COLUMN shop_domain TEXT`,
+  ]) {
+    try { db.exec(sql) } catch { /* column already exists */ }
+  }
+  try {
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_events_shop ON events(shop_domain)`)
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_shop ON sessions(shop_domain)`)
+  } catch { /* index already exists */ }
 }
