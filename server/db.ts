@@ -62,11 +62,43 @@ function migrate(db: InstanceType<typeof Database>): void {
   for (const sql of [
     `ALTER TABLE sessions ADD COLUMN shop_domain TEXT`,
     `ALTER TABLE events   ADD COLUMN shop_domain TEXT`,
+    // render_model records which image generation model was used for succeeded/failed jobs
+    `ALTER TABLE events   ADD COLUMN render_model TEXT`,
   ]) {
     try { db.exec(sql) } catch { /* column already exists */ }
   }
   try {
-    db.exec(`CREATE INDEX IF NOT EXISTS idx_events_shop ON events(shop_domain)`)
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_events_shop  ON events(shop_domain)`)
     db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_shop ON sessions(shop_domain)`)
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_events_model ON events(render_model)`)
   } catch { /* index already exists */ }
+
+  // Key-value config table — stores default_model and fallback_model
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS model_config (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+    INSERT OR IGNORE INTO model_config (key, value)
+      VALUES ('default_model', 'gemini-2.5-flash-image-batch'),
+             ('fallback_model', 'gpt-image-2');
+  `)
+}
+
+import type { ProviderModelId } from './imageProvider.js'
+
+export function getModelConfig(): { defaultModel: ProviderModelId; fallbackModel: ProviderModelId } {
+  const db = getDb()
+  const rows = db.prepare<[], { key: string; value: string }>('SELECT key, value FROM model_config').all()
+  const map = Object.fromEntries(rows.map(r => [r.key, r.value]))
+  return {
+    defaultModel: (map['default_model'] ?? 'gemini-2.5-flash-image-batch') as ProviderModelId,
+    fallbackModel: (map['fallback_model'] ?? 'gpt-image-2') as ProviderModelId,
+  }
+}
+
+export function setModelConfig(defaultModel: ProviderModelId, fallbackModel: ProviderModelId): void {
+  const db = getDb()
+  db.prepare('INSERT OR REPLACE INTO model_config (key, value) VALUES (?, ?)').run('default_model', defaultModel)
+  db.prepare('INSERT OR REPLACE INTO model_config (key, value) VALUES (?, ?)').run('fallback_model', fallbackModel)
 }

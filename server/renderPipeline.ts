@@ -1,4 +1,5 @@
-import OpenAI, { toFile } from 'openai'
+import { generateImage, editImage, type ProviderModelId } from './imageProvider.js'
+import { getModelConfig } from './db.js'
 import { trackRenderJobSucceeded, trackRenderJobFailed } from './analytics.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -17,16 +18,16 @@ export interface RenderJobRecord {
   shopDomain: string | null
   // Prompt compilation — explicit and inspectable
   briefRenderPrompt: string     // raw prompt from the scene-brief GPT step
-  compiledPrompt: string        // final prompt sent to gpt-image-2 (generate path)
+  compiledPrompt: string        // final prompt sent for generate path
   editPrompt: string            // prompt for the edit path (uploaded room)
-  // gpt-image-2 call contract
-  model: 'gpt-image-2'
+  // Provider model used (filled once job completes)
+  model: ProviderModelId | null
   size: '1024x1024' | '1792x1024' | '1024x1792'
   quality: 'low' | 'medium' | 'high' | 'auto'
   // Lifecycle
   status: 'submitted' | 'processing' | 'succeeded' | 'failed'
   imageUrl: string | null       // /api/render-jobs/:jobId/image once succeeded
-  revisedPrompt: string | null  // returned by gpt-image-2 alongside the image
+  revisedPrompt: string | null
   error: string | null
   createdAt: string
   updatedAt: string
@@ -46,27 +47,56 @@ export function compileRenderPrompt(
 }
 
 export function compileEditPrompt(product: ProductDetails): string {
+  const desc = product.material ? `${product.title} crafted from ${product.material.toLowerCase()}` : product.title
   return [
-    `Add a ${product.title} side cabinet crafted from ${product.material.toLowerCase()} to this room.`,
+    `Add a ${desc} to this room.`,
     'Place it naturally against a wall in a visually balanced and realistic position.',
     'Keep all existing walls, floor, ceiling, and other furniture exactly as they are.',
     'Ultra-realistic editorial interior design photography, sharp detail, seamless integration.',
   ].join(' ')
 }
 
+// Used when a pre-rendered cutout is available as a second image input.
+// The model sees the exact product rather than inferring from text description.
+export function compileCutoutEditPrompt(): string {
+  return [
+    'Image 1 is a room photo. Image 2 is a product cutout — the white areas are transparent background, ignore them.',
+    'Composite the furniture piece from Image 2 into the room in Image 1 exactly as it appears: same model, colors, textures, proportions, and design details.',
+    'Place it naturally against a wall in a visually balanced position.',
+    'Do NOT substitute or invent a different piece of furniture — use the exact product shown in Image 2.',
+    'Keep all existing walls, floor, ceiling, and other furniture from Image 1 exactly as they are.',
+    'Output a single ultra-realistic interior design photo with seamless lighting and sharp detail.',
+  ].join(' ')
+}
+
 // ─── Image storage ────────────────────────────────────────────────────────────
 
-// Generated output images — keyed by jobId
 export const imageBuffers = new Map<string, { data: Buffer; contentType: string }>()
+export const roomImages   = new Map<string, { data: Buffer; contentType: string }>()
 
-// Uploaded room images — keyed by roomId ('uploaded-room')
-export const roomImages = new Map<string, { data: Buffer; contentType: string }>()
+// ─── Cutout fetcher ───────────────────────────────────────────────────────────
+
+async function fetchCutout(
+  productId: string,
+  shopDomain: string,
+): Promise<{ buffer: Buffer; contentType: string } | null> {
+  const backofficeUrl = process.env.BACKOFFICE_URL
+  if (!backofficeUrl) return null
+  try {
+    const res = await fetch(
+      `${backofficeUrl}/api/assets/${encodeURIComponent(productId)}/cutout?shop=${encodeURIComponent(shopDomain)}`,
+    )
+    if (!res.ok) return null
+    return {
+      buffer: Buffer.from(await res.arrayBuffer()),
+      contentType: res.headers.get('content-type') ?? 'image/png',
+    }
+  } catch {
+    return null
+  }
+}
 
 // ─── Processing ──────────────────────────────────────────────────────────────
-
-function getClient(): OpenAI {
-  return new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-}
 
 export async function processRenderJob(
   jobId: string,
@@ -79,85 +109,55 @@ export async function processRenderJob(
   job.updatedAt = new Date().toISOString()
   const startedAt = Date.now()
 
-  try {
-    const client = getClient()
-    const roomImg = roomImages.get(job.roomId)
+  const { defaultModel, fallbackModel } = getModelConfig()
 
-    let imageBuffer: Buffer
-    let contentType = 'image/png'
+  try {
+    const roomImg = roomImages.get(job.roomId)
+    let usedModel: ProviderModelId
 
     if (roomImg) {
-      // Uploaded room → edit the photo to place the cabinet inside it
-      const imageFile = await toFile(
-        new Blob([roomImg.data], { type: roomImg.contentType }),
-        'room.png',
-        { type: roomImg.contentType },
-      )
+      // Try to load the pre-generated cutout so the model sees the exact product.
+      const cutout = job.productId && job.shopDomain
+        ? await fetchCutout(job.productId, job.shopDomain)
+        : null
 
-      const response = await client.images.edit({
-        model: job.model,
-        image: imageFile,
-        prompt: job.editPrompt,
-        n: 1,
-        size: job.size,
-      })
-
-      const imageData = response.data[0]
-      if (!imageData) throw new Error('gpt-image-2 edit returned empty data array')
-
-      if (imageData.b64_json) {
-        imageBuffer = Buffer.from(imageData.b64_json, 'base64')
-      } else if (imageData.url) {
-        const imgRes = await fetch(imageData.url)
-        if (!imgRes.ok) throw new Error(`Failed to fetch edited image: ${imgRes.status}`)
-        const ct = imgRes.headers.get('content-type')
-        if (ct) contentType = ct
-        imageBuffer = Buffer.from(await imgRes.arrayBuffer())
-      } else {
-        throw new Error('gpt-image-2 edit response contained neither url nor b64_json')
+      if (cutout) {
+        console.info(`[render-pipeline] job ${jobId} using cutout for product ${job.productId}`)
       }
 
-      console.info(`[render-pipeline] job ${jobId} edit succeeded (${imageBuffer.length} bytes)`)
+      const { result, usedModel: m } = await editImage(defaultModel, fallbackModel, {
+        imageBuffer: roomImg.data,
+        imageContentType: roomImg.contentType,
+        cutoutBuffer: cutout?.buffer,
+        cutoutContentType: cutout?.contentType,
+        prompt: cutout ? compileCutoutEditPrompt() : job.editPrompt,
+        size: job.size,
+      })
+      usedModel = m
+      imageBuffers.set(jobId, { data: result.buffer, contentType: result.contentType })
+      console.info(`[render-pipeline] job ${jobId} edit succeeded via ${usedModel} (${result.buffer.length} bytes)`)
     } else {
-      // Preset room → generate from prompt
-      const response = await client.images.generate({
-        model: job.model,
+      const { result, usedModel: m } = await generateImage(defaultModel, fallbackModel, {
         prompt: job.compiledPrompt,
-        n: 1,
         size: job.size,
         quality: job.quality,
       })
-
-      const imageData = response.data[0]
-      if (!imageData) throw new Error('gpt-image-2 returned empty data array')
-
-      if (imageData.b64_json) {
-        imageBuffer = Buffer.from(imageData.b64_json, 'base64')
-      } else if (imageData.url) {
-        const imgRes = await fetch(imageData.url)
-        if (!imgRes.ok) throw new Error(`Failed to fetch generated image: ${imgRes.status}`)
-        const ct = imgRes.headers.get('content-type')
-        if (ct) contentType = ct
-        imageBuffer = Buffer.from(await imgRes.arrayBuffer())
-      } else {
-        throw new Error('gpt-image-2 response contained neither url nor b64_json')
-      }
-
-      console.info(`[render-pipeline] job ${jobId} generate succeeded (${imageBuffer.length} bytes)`)
+      usedModel = m
+      imageBuffers.set(jobId, { data: result.buffer, contentType: result.contentType })
+      console.info(`[render-pipeline] job ${jobId} generate succeeded via ${usedModel} (${result.buffer.length} bytes)`)
     }
 
-    imageBuffers.set(jobId, { data: imageBuffer, contentType })
-
+    job.model = usedModel
     job.status = 'succeeded'
     job.imageUrl = `/api/render-jobs/${jobId}/image`
     job.revisedPrompt = null
     job.updatedAt = new Date().toISOString()
-    trackRenderJobSucceeded(jobId, job.productId, Date.now() - startedAt, job.shopDomain ?? undefined)
+    trackRenderJobSucceeded(jobId, job.productId, Date.now() - startedAt, job.shopDomain ?? undefined, usedModel)
   } catch (err) {
     job.status = 'failed'
     job.error = err instanceof Error ? err.message : String(err)
     job.updatedAt = new Date().toISOString()
     console.error(`[render-pipeline] job ${jobId} failed:`, err)
-    trackRenderJobFailed(jobId, job.productId, job.error, Date.now() - startedAt, job.shopDomain ?? undefined)
+    trackRenderJobFailed(jobId, job.productId, job.error, Date.now() - startedAt, job.shopDomain ?? undefined, job.model ?? undefined)
   }
 }

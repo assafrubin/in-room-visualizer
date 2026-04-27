@@ -36,6 +36,7 @@ export interface TrackEventInput {
   actionId?: string
   jobId?: string
   shopDomain?: string           // merchant identifier; stamped by backoffice proxy
+  renderModel?: string          // which image model was used (server-side events only)
   properties?: Record<string, unknown>
   // Supplied by server for client events
   userAgent?: string
@@ -94,9 +95,9 @@ export function trackEvent(input: TrackEventInput): string {
 
   db.prepare(`
     INSERT INTO events
-      (id, session_id, event_type, surface, product_id, room_id, action_id, job_id, shop_domain, properties, created_at)
+      (id, session_id, event_type, surface, product_id, room_id, action_id, job_id, shop_domain, render_model, properties, created_at)
     VALUES
-      (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     sessionId,
@@ -107,6 +108,7 @@ export function trackEvent(input: TrackEventInput): string {
     input.actionId ?? null,
     input.jobId ?? null,
     input.shopDomain ?? null,
+    input.renderModel ?? null,
     input.properties ? JSON.stringify(input.properties) : null,
     now,
   )
@@ -121,12 +123,12 @@ export function trackRenderJobCreated(jobId: string, productId: string | null, r
   trackEvent({ eventType: 'render_job_created', jobId, productId: productId ?? undefined, roomId, shopDomain, properties: { is_edit_mode: isEditMode } })
 }
 
-export function trackRenderJobSucceeded(jobId: string, productId: string | null, durationMs: number, shopDomain?: string): void {
-  trackEvent({ eventType: 'render_job_succeeded', jobId, productId: productId ?? undefined, shopDomain, properties: { duration_ms: durationMs } })
+export function trackRenderJobSucceeded(jobId: string, productId: string | null, durationMs: number, shopDomain?: string, renderModel?: string): void {
+  trackEvent({ eventType: 'render_job_succeeded', jobId, productId: productId ?? undefined, shopDomain, renderModel, properties: { duration_ms: durationMs } })
 }
 
-export function trackRenderJobFailed(jobId: string, productId: string | null, error: string, durationMs: number, shopDomain?: string): void {
-  trackEvent({ eventType: 'render_job_failed', jobId, productId: productId ?? undefined, shopDomain, properties: { error, duration_ms: durationMs } })
+export function trackRenderJobFailed(jobId: string, productId: string | null, error: string, durationMs: number, shopDomain?: string, renderModel?: string): void {
+  trackEvent({ eventType: 'render_job_failed', jobId, productId: productId ?? undefined, shopDomain, renderModel, properties: { error, duration_ms: durationMs } })
 }
 
 // ─── Analytics queries ────────────────────────────────────────────────────────
@@ -189,4 +191,28 @@ export function getAnalyticsSummary(shopDomain: string, since?: string): Analyti
   `).all(shopDomain, cutoff)
 
   return { rendersByDevice, funnel, rendersByDay, topProducts }
+}
+
+// ─── Model usage ──────────────────────────────────────────────────────────────
+
+export interface ModelUsagePoint {
+  day: string
+  render_model: string
+  count: number
+}
+
+export function getModelUsageStats(since?: string): ModelUsagePoint[] {
+  const db = getDb()
+  const cutoff = since ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+
+  return db.prepare<[string], ModelUsagePoint>(`
+    SELECT strftime('%Y-%m-%d', created_at) as day,
+           COALESCE(render_model, 'unknown') as render_model,
+           COUNT(*) as count
+    FROM events
+    WHERE event_type IN ('render_job_succeeded', 'render_job_failed')
+      AND created_at >= ?
+    GROUP BY day, render_model
+    ORDER BY day, render_model
+  `).all(cutoff)
 }

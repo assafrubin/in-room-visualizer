@@ -24,7 +24,9 @@ import {
   type RenderJobRecord,
   type ProductDetails,
 } from './renderPipeline.js'
-import { trackEvent, trackRenderJobCreated, getAnalyticsSummary, type TrackEventInput } from './analytics.js'
+import { trackEvent, trackRenderJobCreated, getAnalyticsSummary, getModelUsageStats, type TrackEventInput } from './analytics.js'
+import { getModelConfig, setModelConfig } from './db.js'
+import { AVAILABLE_MODELS, type ProviderModelId } from './imageProvider.js'
 import type { QuickActionId } from '../src/types/index.js'
 
 const app = express()
@@ -85,6 +87,15 @@ app.post('/api/rooms/:roomId/analysis', (req, res) => {
 })
 
 // ─── POST /api/scene-briefs ───────────────────────────────────────────────────
+
+app.get('/api/scene-briefs/:id', (req, res) => {
+  const brief = briefs.get(req.params.id)
+  if (!brief) { res.status(404).json({ error: 'Brief not found' }); return }
+  const room = getRoomById(brief.roomId)
+  const action = getActionById(brief.actionId)
+  if (!room || !action) { res.status(500).json({ error: 'Missing room or action' }); return }
+  res.json({ brief: { ...brief, room, action } })
+})
 
 app.post('/api/scene-briefs', async (req, res) => {
   const { roomId, actionId, refinementText = '', collectionName } = req.body as {
@@ -184,7 +195,7 @@ app.post('/api/render-jobs', (req, res) => {
     briefRenderPrompt: brief.renderPrompt,
     compiledPrompt,
     editPrompt,
-    model: 'gpt-image-2',
+    model: null,          // filled in by processRenderJob once a provider succeeds
     size: '1024x1024',
     quality: 'auto',
     status: 'submitted',
@@ -251,6 +262,52 @@ app.get('/api/collection-config', async (req, res) => {
     res.json({ configured: true, enabledCollectionHandles: data.enabledCollectionHandles })
   } catch {
     res.json({ configured: false, enabledCollectionHandles: [] })
+  }
+})
+
+// ─── Internal: model config (admin only) ─────────────────────────────────────
+
+function requireInternalSecret(req: express.Request, res: express.Response, next: express.NextFunction): void {
+  const secret = process.env.INTERNAL_SECRET
+  if (secret && req.headers['x-internal-secret'] !== secret) {
+    res.status(401).json({ error: 'Unauthorized' }); return
+  }
+  next()
+}
+
+app.get('/api/internal/model-config', requireInternalSecret, (_req, res) => {
+  try {
+    const config = getModelConfig()
+    res.json({ ...config, availableModels: AVAILABLE_MODELS })
+  } catch (err) {
+    res.status(500).json({ error: String(err) })
+  }
+})
+
+app.patch('/api/internal/model-config', requireInternalSecret, (req, res) => {
+  const { defaultModel, fallbackModel } = req.body as { defaultModel?: ProviderModelId; fallbackModel?: ProviderModelId }
+  const validIds = AVAILABLE_MODELS.map(m => m.id)
+  if (defaultModel && !validIds.includes(defaultModel)) { res.status(400).json({ error: 'Invalid defaultModel' }); return }
+  if (fallbackModel && !validIds.includes(fallbackModel)) { res.status(400).json({ error: 'Invalid fallbackModel' }); return }
+
+  try {
+    const current = getModelConfig()
+    setModelConfig(
+      defaultModel ?? current.defaultModel,
+      fallbackModel ?? current.fallbackModel,
+    )
+    res.json(getModelConfig())
+  } catch (err) {
+    res.status(500).json({ error: String(err) })
+  }
+})
+
+app.get('/api/internal/model-usage', requireInternalSecret, (req, res) => {
+  const since = req.query.since as string | undefined
+  try {
+    res.json({ usage: getModelUsageStats(since) })
+  } catch (err) {
+    res.status(500).json({ error: String(err) })
   }
 })
 
